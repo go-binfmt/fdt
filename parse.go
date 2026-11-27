@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unsafe"
 )
 
 func be32(b []byte) uint32 { return binary.BigEndian.Uint32(b) }
@@ -138,7 +139,18 @@ func (e versionError) Unwrap() error        { return e.error }
 // subnodes, unique property names within a node and unique node names within
 // a parent, and an FDT_END token after the root. Bytes of the structure block
 // after FDT_END are ignored, as libfdt ignores them.
-func Parse(b []byte) (*Tree, error) {
+func Parse(b []byte) (*Tree, error) { return parse(b, true) }
+
+// ParseShared is Parse without the copy of the structure block: the property
+// values of the returned Tree are subslices of b (capacity-limited, so an
+// append to one cannot reach its neighbour). It is for large blobs, such as a
+// FIT image with its kernel and ramdisk inside, where Parse would copy every
+// embedded byte. The caller must not modify b while the Tree, or anything
+// taken from it, is in use; node and property names are views into b as well.
+// Everything else, including every check, is Parse.
+func ParseShared(b []byte) (*Tree, error) { return parse(b, false) }
+
+func parse(b []byte, copyBlob bool) (*Tree, error) {
 	h, bl, err := parseHeader(b)
 	if err != nil {
 		return nil, err
@@ -170,8 +182,14 @@ func Parse(b []byte) (*Tree, error) {
 		sb:   b[bl.structOff:bl.structEnd],
 		strs: string(b[bl.stringsOff:bl.stringsEnd]),
 	}
-	p.arena = slices.Clone(p.sb)
-	p.names = string(p.sb)
+	p.arena = p.sb
+	if copyBlob {
+		p.arena = slices.Clone(p.sb)
+	}
+	// Node names are substrings of the structure block. They view the same
+	// bytes as the property values, which are the only ones a caller can write
+	// to: the bytes of a name are never reachable as a []byte.
+	p.names = unsafe.String(unsafe.SliceData(p.arena), len(p.arena))
 	root, err := p.walk()
 	if err != nil {
 		return nil, err

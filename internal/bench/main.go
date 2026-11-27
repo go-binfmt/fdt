@@ -106,8 +106,9 @@ func run(dir, cc, cflags, ldflags string, rounds int, cases []benchCase) error {
 	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("compiling the libfdt side: %v\n%s", err, out)
 	}
-	type sample struct{ cParse, goParse, cWrite, goWrite []float64 }
+	type sample struct{ cParse, goParse, goShared, cWrite, goWrite, goAppend []float64 }
 	var res = make([]sample, len(cases))
+	bufs := make([][]byte, len(cases))
 	files := make([]string, len(cases))
 	blobs := make([][]byte, len(cases))
 	for i, c := range cases {
@@ -138,7 +139,18 @@ func run(dir, cc, cflags, ldflags string, rounds int, cases []benchCase) error {
 				return err
 			}
 			res[i].cWrite = append(res[i].cWrite, w)
+			res[i].goShared = append(res[i].goShared, goNs(func() {
+				if _, err := fdt.ParseShared(blobs[i]); err != nil {
+					panic(err)
+				}
+			}))
 			tr := cases[i].tree
+			res[i].goAppend = append(res[i].goAppend, goNs(func() {
+				var err error
+				if bufs[i], err = tr.AppendMarshal(bufs[i][:0]); err != nil {
+					panic(err)
+				}
+			}))
 			res[i].goWrite = append(res[i].goWrite, goNs(func() {
 				if _, err := tr.Marshal(); err != nil {
 					panic(err)
@@ -152,7 +164,9 @@ func run(dir, cc, cflags, ldflags string, rounds int, cases []benchCase) error {
 	for i, c := range cases {
 		size := fmt.Sprintf("%s (%s)", c.name, human(len(blobs[i])))
 		row(size, "parse", res[i].cParse, res[i].goParse)
+		row(size, "parse, ParseShared (no copy)", res[i].cParse, res[i].goShared)
 		row(size, "write", res[i].cWrite, res[i].goWrite)
+		row(size, "write, AppendMarshal (reused buffer)", res[i].cWrite, res[i].goAppend)
 	}
 	return nil
 }

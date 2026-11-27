@@ -37,7 +37,7 @@ static uint64_t visit(const void *fdt)
 			sum += (uint64_t)len + (uint8_t)name[0] + (v ? 1 : 0);
 		}
 		int next = fdt_next_node(fdt, node, &depth);
-		if (next < 0)
+		if (next < 0 || depth < 0) /* depth < 0: past the root's end */
 			break;
 		int l;
 		sum += (uint8_t)fdt_get_name(fdt, next, &l)[0];
@@ -73,7 +73,7 @@ static struct op *collect(const void *fdt, size_t *nops)
 		}
 		int before = depth;
 		int next = fdt_next_node(fdt, node, &depth);
-		if (next < 0) {
+		if (next < 0 || depth < 0) {
 			for (int d = before; d >= 0; d--)
 				PUSH(OP_END, NULL, NULL, 0);
 			break;

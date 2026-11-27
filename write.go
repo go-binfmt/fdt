@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"io"
 	"math"
+	"slices"
 )
 
 // maxSize is the largest blob, structure block or property the format's
@@ -23,7 +24,13 @@ var maxSize uint64 = math.MaxUint32
 // parse back: no root, a root with a name or a child without one, a '/' or NUL
 // in a node name, an empty property name, duplicate names, nesting deeper
 // than MaxDepth, or a blob that would not fit the format's 32-bit offsets.
-func (t *Tree) Marshal() ([]byte, error) {
+func (t *Tree) Marshal() ([]byte, error) { return t.AppendMarshal(nil) }
+
+// AppendMarshal appends the blob Marshal would return to dst and returns the
+// extended slice. A caller that writes many blobs reuses one buffer
+// (buf, err = t.AppendMarshal(buf[:0])) and pays for no allocation and no
+// zeroing of the output. On error it returns nil and an error.
+func (t *Tree) AppendMarshal(dst []byte) ([]byte, error) {
 	if t == nil || t.Root == nil {
 		return nil, formatErr("tree has no root")
 	}
@@ -39,10 +46,12 @@ func (t *Tree) Marshal() ([]byte, error) {
 	offStruct := uint64(HeaderSize) + rsv
 	offStrings := offStruct + structSize
 	total := offStrings + uint64(len(w.strtab))
-	if total > maxSize {
+	if total > maxSize || total > math.MaxInt {
 		return nil, formatErr("blob of %d bytes exceeds the 32-bit size limit", total)
 	}
-	out := make([]byte, total)
+	start := len(dst)
+	dst = slices.Grow(dst, int(total))[:start+int(total)]
+	out := dst[start:]
 	be := binary.BigEndian
 	be.PutUint32(out[0:], Magic)
 	be.PutUint32(out[4:], uint32(total))
@@ -60,13 +69,13 @@ func (t *Tree) Marshal() ([]byte, error) {
 		be.PutUint64(out[pos+8:], r.Size)
 		pos += 16
 	}
-	// The terminator and the padding of every block are already zero.
+	clear(out[pos : pos+16]) // the reservation block's terminator
 	w.out = out[:offStrings]
 	w.pos = int(offStruct)
 	w.emit(t.Root)
 	be.PutUint32(w.out[w.pos:], tokEnd)
 	copy(out[offStrings:], w.strtab)
-	return out, nil
+	return dst, nil
 }
 
 // WriteTo marshals the tree and writes it to dst.
@@ -180,8 +189,10 @@ func (w *writer) emit(n *Node) {
 	be := binary.BigEndian
 	be.PutUint32(w.out[w.pos:], tokBeginNode)
 	w.pos += 4
-	w.pos += copy(w.out[w.pos:], n.Name) // the NUL and padding are zero already
-	w.pos += 1 + (-(len(n.Name) + 1) & 3)
+	w.pos += copy(w.out[w.pos:], n.Name)
+	pad := 1 + (-(len(n.Name) + 1) & 3) // the NUL and the padding to 4 bytes
+	clear(w.out[w.pos : w.pos+pad])
+	w.pos += pad
 	for i := range n.Props {
 		p := &n.Props[i]
 		be.PutUint32(w.out[w.pos:], tokProp)
@@ -190,7 +201,9 @@ func (w *writer) emit(n *Node) {
 		w.next++
 		w.pos += 12
 		w.pos += copy(w.out[w.pos:], p.Value)
-		w.pos += -len(p.Value) & 3
+		pad := -len(p.Value) & 3
+		clear(w.out[w.pos : w.pos+pad])
+		w.pos += pad
 	}
 	for _, c := range n.Children {
 		w.emit(c)
