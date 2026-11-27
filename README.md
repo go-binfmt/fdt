@@ -76,7 +76,32 @@ Single core, interleaved rounds, against libfdt (C, `-O2`): `fdt.Parse` against
 -dir <dir>` reproduces it; CI runs it pinned (`taskset -c 0`) and prints the
 table in the job summary.
 
-BENCH_TABLE
+Measured by the CI `bench` job (linux/amd64 runner, `taskset -c 0`, 2026-11-27, median ns/op, ratio = libfdt / fdt, so above 1 means fdt is faster):
+
+| blob | operation | libfdt | fdt | libfdt / fdt |
+|---|---|---:|---:|---:|
+| board 40 nodes (7.3 KiB) | parse | 34.7 us | 20.7 us | 1.68x |
+| board 40 nodes (7.3 KiB) | ParseShared | 34.7 us | 18.8 us | 1.85x |
+| board 40 nodes (7.3 KiB) | write | 45.7 us | 17.8 us | 2.57x |
+| board 40 nodes (7.3 KiB) | AppendMarshal, reused buffer | 45.7 us | 16.9 us | 2.71x |
+| board 2000 nodes (349.9 KiB) | parse | 1.70 ms | 1.04 ms | 1.64x |
+| board 2000 nodes (349.9 KiB) | ParseShared | 1.70 ms | 994.4 us | 1.71x |
+| board 2000 nodes (349.9 KiB) | write | 2.22 ms | 669.6 us | 3.32x |
+| board 2000 nodes (349.9 KiB) | AppendMarshal, reused buffer | 2.22 ms | 648.7 us | 3.43x |
+| board 100000 nodes (17.1 MiB) | parse | 85.21 ms | 58.86 ms | 1.45x |
+| board 100000 nodes (17.1 MiB) | ParseShared | 85.21 ms | 58.37 ms | 1.46x |
+| board 100000 nodes (17.1 MiB) | write | 105.06 ms | 40.49 ms | 2.59x |
+| board 100000 nodes (17.1 MiB) | AppendMarshal, reused buffer | 105.06 ms | 39.58 ms | 2.65x |
+| FIT-like, 3 x 8 MiB data (24.0 MiB) | parse (copies the values) | 12.1 us | 4.25 ms | 0.00x |
+| FIT-like, 3 x 8 MiB data (24.0 MiB) | ParseShared | 12.1 us | 7.0 us | 1.73x |
+| FIT-like, 3 x 8 MiB data (24.0 MiB) | write (allocates 24 MiB) | 3.50 ms | 4.91 ms | 0.71x |
+| FIT-like, 3 x 8 MiB data (24.0 MiB) | AppendMarshal, reused buffer | 3.50 ms | 566.9 us | 6.17x |
+
+The two FIT-like rows below 1 are the owning calls: `Parse` copies 24 MiB of
+values and `Marshal` allocates a 24 MiB buffer, which libfdt does not do
+(it checks in place and writes into a caller buffer). For large payloads use
+`ParseShared` and `AppendMarshal`, which do the same work as libfdt and are
+faster.
 
 ## Licence
 
