@@ -1,0 +1,136 @@
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+permissions: { contents: read }
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: '1.27.4' }
+      # The oracle lane needs dtc (the byte-identity reference) and fdtget (the
+      # differential reader). It is REQUIRED here: FDT_REQUIRE_DTC turns the
+      # skip into a failure, so a runner image that loses them cannot turn the
+      # lane into a green tick.
+      - name: reference tools (dtc, fdtget)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq device-tree-compiler
+          dtc --version
+          command -v fdtget
+      - run: go vet ./...
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      # -race and -count=1: a cached PASS must not stand in for this run. The
+      # committed fuzz corpus (testdata/fuzz/FuzzParse) replays as ordinary tests.
+      - name: test, with the oracle lane required
+        env: { FDT_REQUIRE_DTC: "1" }
+        run: go test -race -count=1 -coverprofile=cover.out . ./cmd/...
+      - name: coverage must be 100%
+        run: go tool cover -func=cover.out | grep -E '^total:' | grep -q '100.0%' || { go tool cover -func=cover.out | grep -v '100.0%'; exit 1; }
+
+  # 32-bit: every offset is an int there, and a bound that is only right in 64
+  # bits is the kind of bug a 64-bit lane cannot show.
+  test-386:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: '1.27.4' }
+      - name: reference tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq device-tree-compiler
+      - name: go test (GOARCH=386)
+        env: { GOARCH: '386', CGO_ENABLED: '0', FDT_REQUIRE_DTC: "1" }
+        run: go test -count=1 ./...
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: '1.27.4' }
+      - name: fuzz FuzzParse for 60 seconds
+        run: go test -run '^$' -fuzz '^FuzzParse$' -fuzztime 60s .
+
+  # s390x is BIG-ENDIAN, like the blob format itself; this lane runs the code
+  # under that byte order, with the host tools out of reach.
+  s390x:
+    name: test (s390x, qemu, big-endian)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: '1.27.4' }
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user qemu-user-binfmt
+          q=qemu-s390x-static; command -v "$q" >/dev/null 2>&1 || q=qemu-s390x
+          echo "QEMU_EXEC=$q" >> "$GITHUB_ENV"
+      - name: go test (GOARCH=s390x under qemu)
+        env:
+          CGO_ENABLED: '0'
+          GOARCH: s390x
+          GOOS: linux
+        run: |
+          echo "running s390x under $QEMU_EXEC"
+          go test -count=1 -exec "$QEMU_EXEC" ./...
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: linux,   goarch: riscv64 }
+          - { goos: linux,   goarch: ppc64le }
+          - { goos: linux,   goarch: s390x }
+          - { goos: linux,   goarch: loong64 }
+          - { goos: linux,   goarch: '386' }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: freebsd, goarch: amd64 }
+          - { goos: netbsd,  goarch: amd64 }
+          - { goos: openbsd, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: '1.27.4' }
+      - name: build ${{ matrix.goos }}/${{ matrix.goarch }} (CGO=0)
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: go build ./...
+
+  darwin:
+    name: test (macOS)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: '1.27.4' }
+      - run: go test -count=1 ./...
+
+  # Single core, interleaved rounds, against libfdt (C, -O2). The table is
+  # printed into the job summary; README quotes it.
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: '1.27.4' }
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libfdt-dev gcc
+      - run: |
+          go build -o "$RUNNER_TEMP/bench" ./internal/bench
+          uptime
+          taskset -c 0 "$RUNNER_TEMP/bench" -dir "$RUNNER_TEMP/benchdata" -rounds 15 | tee "$RUNNER_TEMP/bench.md"
+          cat "$RUNNER_TEMP/bench.md" >> "$GITHUB_STEP_SUMMARY"
