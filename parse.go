@@ -352,24 +352,25 @@ func (f *frame) addChild(c *Node) error {
 // addProp only checks the name; the caller appends the property.
 func (f *frame) addProp(name string) error {
 	n := f.n
-	if f.propSet != nil {
-		if _, dup := f.propSet[name]; dup {
-			return formatErr("duplicate property %q in %q", name, n.Name)
+	if f.propSet == nil {
+		// Small nodes: a linear scan; past linearNames, switch to a set.
+		for i := range n.Props {
+			if n.Props[i].Name == name {
+				return formatErr("duplicate property %q in %q", name, n.Name)
+			}
 		}
-		f.propSet[name] = struct{}{}
+		if len(n.Props) >= linearNames {
+			f.propSet = make(map[string]struct{}, 2*linearNames)
+			for i := range n.Props {
+				f.propSet[n.Props[i].Name] = struct{}{}
+			}
+			f.propSet[name] = struct{}{}
+		}
 		return nil
 	}
-	for i := range n.Props {
-		if n.Props[i].Name == name {
-			return formatErr("duplicate property %q in %q", name, n.Name)
-		}
+	if _, dup := f.propSet[name]; dup {
+		return formatErr("duplicate property %q in %q", name, n.Name)
 	}
-	if len(n.Props) >= linearNames {
-		f.propSet = make(map[string]struct{}, 2*linearNames)
-		for i := range n.Props {
-			f.propSet[n.Props[i].Name] = struct{}{}
-		}
-		f.propSet[name] = struct{}{}
-	}
+	f.propSet[name] = struct{}{}
 	return nil
 }

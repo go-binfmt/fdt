@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -109,6 +110,27 @@ func TestCommandErrors(t *testing.T) {
 			t.Errorf("%v: no error", args)
 		}
 	}
+	// A malformed blob is refused by the parser, by every command that loads.
+	_, want := run(t, "", "check", bad)
+	for _, args := range [][]string{{"check", bad}, {"dump", bad}, {"ls", bad}, {"get", bad, "/"}} {
+		if _, err := run(t, "", args...); !errors.Is(err, fdt.ErrFormat) || err.Error() != want.Error() {
+			t.Errorf("%v: %v, want the parser's %v", args, err, want)
+		}
+	}
+	// A missing file names itself.
+	missing := filepath.Join(t.TempDir(), "missing")
+	if _, err := run(t, "", "check", missing); err == nil || !strings.Contains(err.Error(), missing) {
+		t.Errorf("missing file: %v", err)
+	}
+	// A read that fails midway is an error, not a short blob.
+	cmd := RootCmd()
+	cmd.SetIn(failingReader{})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"check", "-"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Errorf("failing stdin: %v", err)
+	}
 	old := maxInput
 	maxInput = 10
 	defer func() { maxInput = old }()
@@ -122,12 +144,24 @@ func TestCommandErrors(t *testing.T) {
 	}
 }
 
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("boom") }
+
+func TestVersionFlag(t *testing.T) {
+	out, err := run(t, "", "--version")
+	if err != nil || out != "fdt "+version()+"\n" {
+		t.Errorf("--version: %q %v", out, err)
+	}
+}
+
 func TestVersionAndMain(t *testing.T) {
 	oldV, oldB := Version, readBuildInfo
 	defer func() { Version, readBuildInfo = oldV, oldB }()
 	Version = "v9.9.9"
+	readBuildInfo = func() (*debug.BuildInfo, bool) { return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true }
 	if version() != "v9.9.9" {
-		t.Error("ldflags version ignored")
+		t.Error("ldflags version must win over build info")
 	}
 	Version = "dev"
 	readBuildInfo = func() (*debug.BuildInfo, bool) { return &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}, true }

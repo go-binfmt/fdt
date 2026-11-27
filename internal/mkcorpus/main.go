@@ -24,19 +24,20 @@ func main() {
 		fmt.Fprintln(os.Stderr, "mkcorpus: -dtc-src is required")
 		os.Exit(2)
 	}
-	if err := run(*src, *dtc); err != nil {
+	if err := run(*src, *dtc, "."); err != nil {
 		fmt.Fprintln(os.Stderr, "mkcorpus:", err)
 		os.Exit(1)
 	}
 }
 
-func run(src, dtc string) error {
+// run writes under root, which is the module root when run by hand.
+func run(src, dtc, root string) error {
 	files, err := filepath.Glob(filepath.Join(src, "tests", "*.dts"))
 	if err != nil {
 		return err
 	}
 	for _, d := range []string{"testdata/dtc", "testdata/fuzz/FuzzParse"} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
 			return err
 		}
 	}
@@ -52,11 +53,11 @@ func run(src, dtc string) error {
 			if err != nil || len(out) == 0 {
 				continue
 			}
-			if err := os.WriteFile("testdata/dtc/"+base+v.suffix+".dtb", out, 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(root, "testdata/dtc", base+v.suffix+".dtb"), out, 0o644); err != nil {
 				return err
 			}
 			seed := fmt.Sprintf("go test fuzz v1\n[]byte(%q)\n", out)
-			if err := os.WriteFile("testdata/fuzz/FuzzParse/dtc-"+base+v.suffix, []byte(seed), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(root, "testdata/fuzz/FuzzParse", "dtc-"+base+v.suffix), []byte(seed), 0o644); err != nil {
 				return err
 			}
 			made = true

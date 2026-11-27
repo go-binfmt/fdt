@@ -33,7 +33,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "bench: -dir is required")
 		os.Exit(2)
 	}
-	if err := run(*dir, *cc, *cflags, *ldflags, *rounds); err != nil {
+	if err := run(*dir, *cc, *cflags, *ldflags, *rounds, defaultCases()); err != nil {
 		fmt.Fprintln(os.Stderr, "bench:", err)
 		os.Exit(1)
 	}
@@ -86,7 +86,16 @@ type benchCase struct {
 	tree *fdt.Tree
 }
 
-func run(dir, cc, cflags, ldflags string, rounds int) error {
+func defaultCases() []benchCase {
+	return []benchCase{
+		{"board 40 nodes", boardTree(40, 0)},
+		{"board 2000 nodes", boardTree(2000, 0)},
+		{"board 100000 nodes", boardTree(100000, 0)},
+		{"FIT-like, 3 x 8 MiB data", boardTree(10, 8<<20)},
+	}
+}
+
+func run(dir, cc, cflags, ldflags string, rounds int, cases []benchCase) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -96,12 +105,6 @@ func run(dir, cc, cflags, ldflags string, rounds int) error {
 	args = append(args, strings.Fields(ldflags)...)
 	if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("compiling the libfdt side: %v\n%s", err, out)
-	}
-	cases := []benchCase{
-		{"board 40 nodes", boardTree(40, 0)},
-		{"board 2000 nodes", boardTree(2000, 0)},
-		{"board 100000 nodes", boardTree(100000, 0)},
-		{"FIT-like, 3 x 8 MiB data", boardTree(10, 8<<20)},
 	}
 	type sample struct{ cParse, goParse, cWrite, goWrite []float64 }
 	var res = make([]sample, len(cases))
